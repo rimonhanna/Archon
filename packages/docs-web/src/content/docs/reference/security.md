@@ -118,13 +118,15 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - The `.env.example` file in the repository contains placeholder values -- copy it and fill in real values.
 - Never commit `.env` files to git. The repository's `.gitignore` excludes them.
 
-**CWD `.env` isolation:**
-- When running inside a target repository, Bun auto-loads that repo's `.env` before any Archon code runs. Both the CLI and server strip every key parsed from the CWD `.env` at startup, then load only `~/.archon/.env` (which always wins via `override: true`). This prevents target-repo secrets (e.g. `ANTHROPIC_API_KEY`, `DATABASE_URL`, `OPENAI_API_KEY`) from bleeding into Archon or its subprocesses.
-- Claude Code subprocesses receive only an explicit allowlist of env vars (system essentials, Claude auth, Archon runtime config, git identity, GitHub tokens). Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top of this filtered base.
+**Subprocess env isolation:**
+- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
+- `~/.archon/.env` is then loaded as the trusted source of Archon configuration. All keys the user sets there pass through to subprocesses — there is no allowlist filtering. The user controls this file and all keys are intentional.
+- Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
+- CWD `.env` keys are the **only** untrusted source. They belong to the target project, not to Archon.
 
 ### Env-leak gate (target repo `.env` keys)
 
-Archon scrubs its own environment, but **Bun auto-loads `.env` from the subprocess working directory** before any user code runs. That means a Claude or Codex subprocess started with `cwd=/path/to/target/repo` will re-inject any sensitive keys present in that repo's auto-loaded `.env` files — bypassing the allowlist above and silently billing the wrong API account.
+As a second layer of defense, Archon scans target repos for sensitive keys **before spawning** AI subprocesses. A Claude or Codex subprocess started with `cwd=/path/to/target/repo` inherits Bun's auto-loaded `.env` from that CWD — the env-leak gate catches this by scanning the target repo's `.env` files at registration and pre-spawn time.
 
 **What Archon scans:** auto-loaded filenames `.env`, `.env.local`, `.env.development`, `.env.production`, `.env.development.local`, `.env.production.local`.
 
